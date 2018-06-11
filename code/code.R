@@ -1,68 +1,99 @@
 #------ Titanic -----# 
 ####Import####
 setwd("/Users/walterklaschka/.kaggle/competitions/titanic")
-gender <- read.csv("gender_submission.csv", header = T,na.strings=c("","NA"))
+validation <- read.csv("gender_submission.csv", header = T,na.strings=c("","NA"))
 train <- read.csv("train.csv",na.strings=c("","NA"))
+train$Data <- as.factor("train")
 test <- read.csv("test.csv",na.strings=c("","NA"))
+test$Data <- as.factor("test")
+test$Survived <- NA
+data <- rbind(train,test)
 library(tidyr)
 library(stringr)
 library(dplyr)
 library(mlbench)
 library(caret)
 library(arules)
+library(magrittr)
 
 ####Visualisation####
-str(train)
-hist(train$Age)
+str(data)
+hist(data$Age)
 ####Data Cleaning####
 #Column Type
-train$Survived <- as.factor(train$Survived)
-train$Pclass <- as.factor(train$Pclass)
+data$Survived <- as.factor(data$Survived)
+data$Pclass <- as.factor(data$Pclass)
 
 #Split Columns
-train <- separate(data = train, col = Name, into = c("Surname" , "Name"), sep = ",", remove = T)# seperate name and surname
-train$Name <- gsub("[^[:alnum:][:blank:].]","",train$Name)# remove symbols and such apart from .
-train$Name[514] <-  "Mrs. Martin Elizabeth Barrett"# girl has two . in her name [LOL]
-train <- separate(data = train, col = Name, into = c("Title" , "Name"), sep = "\\.", remove = T)# seperate Title and Name
-train$Title <- gsub("[^[:alnum:]]","",train$Title)# remove symbols and such apart from .
-train$Cabin <- str_sub(train$Cabin, 1,1)
-train$CabinType <- as.factor(train$CabinType)
-train$Title <- as.factor(train$Title)
+data <- separate(data = data, col = Name, into = c("Surname" , "Name"), sep = ",", remove = T)# seperate name and surname
+data$Name <- gsub("[^[:alnum:][:blank:].]","",data$Name)# remove symbols and such apart from .
+data$Name[514] <-  "Mrs. Martin Elizabeth Barrett"# girl has two . in her name [LOL]
+data <- separate(data = data, col = Name, into = c("Title" , "Name"), sep = "\\.", remove = T)# seperate Title and Name
+data$Title <- gsub("[^[:alnum:]]","",data$Title)# remove symbols and such apart from .
+data$Cabin <- str_sub(data$Cabin, 1,1)
+data$Title <- as.factor(data$Title)
 
 #NAs
-allNA <- data.frame(summary(is.na(train)))# investigate all data for NA: Age 177 missing values
-train$Embarked <- as.character(train$Embarked)# make Embarkation as char
-table(train$Embarked)# most embarkations from port S
-train$Embarked[is.na(train$Embarked)] <- "S"# apply port S to NA
-train$Embarked <- as.factor(train$Embarked)
+allNA <- data.frame(summary(is.na(data)))
+data$Fare[is.na(data$Fare)] <- median(data$Fare, na.rm = T)#apply median to 1 missing value
+data$Embarked <- as.character(data$Embarked)# make Embarkation as char
+table(data$Embarked)# most embarkations from port S
+data$Embarked[is.na(data$Embarked)] <- "S"# apply port S to NA
+data$Embarked <- as.factor(data$Embarked)
 
 
 ####Feature Engineering####
-train <- rename(train, CabinType = Cabin)
-train$Cabin <- !is.na(train$Cabin)
-train$CabinType[is.na(train$CabinType)] <- "Z"
-train$CabinType <- as.factor(train$CabinType)# make factor
-train$Famsize <- as.factor(train$SibSp + train$Parch)# add family_size column
-train$SibSp <- as.factor(train$SibSp)#make factor
-train$Parch <- as.factor(train$Parch)#make factor
-train$Fare.n <- round((train$Fare - min(train$Fare))/(max(train$Fare) - min(train$Fare)),digits = 5)# add relative ticket score. 0 = lowest fare, 1 = highest fare, 0.XX
-train$Fare.n <- discretize(train$Fare.n,categories=10)# discretize fare.n for classification
+data <- rename(data, CabinType = Cabin)
+data$Cabin <- !is.na(data$Cabin)
+data$CabinType[is.na(data$CabinType)] <- "Z"
+data$CabinType <- as.factor(data$CabinType)# make factor
+data$Famsize <- as.factor(data$SibSp + data$Parch)# add family_size column
+data$SibSp <- as.factor(data$SibSp)#make factor
+data$Parch <- as.factor(data$Parch)#make factor
+data$Fare.n <- round((data$Fare - min(data$Fare))/(max(data$Fare) - min(data$Fare)),digits = 5)# add relative ticket score. 0 = lowest fare, 1 = highest fare, 0.XX
+data$Fare.n <- discretize(data$Fare.n,categories=10)# discretize fare.n for classification
 # add solo travel column. 0 = not solo, 1= solo ---- problem -> test data required
 # add married column. 0 = not married, 1 = married
 #for (i in which(allData$Title!='man' & allData$Surname=='noGroup')) 
 #allData$Surname[i] = allData$Surname[allData$Ticket==allData$Ticket[i]][1]
 
 ####Feature Selection####
-train.r <- train
-train.r$Age <- NULL
-train.r$Surname <- NULL
-train.r$Name <- NULL
-train.r$Ticket <- NULL
-train.r$Fare <- NULL
+#data$Age <- NULL
+data$Surname <- NULL
+data$Name <- NULL
+data$Ticket <- NULL
+data$Fare <- NULL
+
+#### Prediction of AGE NA ####
+data$Age %<>% as.integer() %<>% discretize(categories = 8, ordered = T)
+data <- data[,c(1,2,6,3,4,5,7:ncol(data))]
+data.naomit <- data[ - which(is.na(data$Age)), ]
+set.seed(123)
+age.part <- createDataPartition(data.naomit$Age, p = 0.6, times = 1, list = F)
+age.train <- data.naomit[age.part,]
+age.test <- data.naomit[- age.part,]
+
+set.seed(123)
+age.auto.ctrl <- rfeControl(functions=rfFuncs, method="cv", number=10)
+age.feat <- rfe(age.train[,4:ncol(age.train)], age.train[,3],rfeControl = age.auto.ctrl)
+print(age.feat)
+age.var <- c("Age","Title","Pclass","Parch","Fare.n")
+
+#### to do get knn working ####
+set.seed(123)
+age.knn <- train(Age~., data = select(age.train, age.var), 
+                 method = "knn", trControl = trainControl(method = "cv",number = 5), 
+                 preProcess= c("center", "scale")
+                 )
+age.knn
+age.validation <- subset(data[,3], data$Data == "test")
+predict(age.validation)
+#apply 
 
 #automated
+set.seed(123)
 auto.ctrl <- rfeControl(functions=rfFuncs, method="cv", number=10)
-auto.feat <- rfe(train.r[,3:ncol(train.r)], train.r[,2],rfeControl = ctrl1)
+auto.feat <- rfe(data.r[,3:ncol(data.r)], data.r[,2],rfeControl = auto.ctrl)
 print(auto.feat)
 
 ####Prediction Model####
