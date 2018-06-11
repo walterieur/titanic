@@ -15,6 +15,7 @@ library(mlbench)
 library(caret)
 library(arules)
 library(magrittr)
+library(randomForest)
 
 ####Visualisation####
 str(data)
@@ -40,7 +41,7 @@ data$Embarked <- as.character(data$Embarked)# make Embarkation as char
 table(data$Embarked)# most embarkations from port S
 data$Embarked[is.na(data$Embarked)] <- "S"# apply port S to NA
 data$Embarked <- as.factor(data$Embarked)
-
+# age is hard to predict based on current data -- will get rid of column later
 
 ####Feature Engineering####
 data <- rename(data, CabinType = Cabin)
@@ -58,44 +59,97 @@ data$Fare.n <- discretize(data$Fare.n,categories=10)# discretize fare.n for clas
 #allData$Surname[i] = allData$Surname[allData$Ticket==allData$Ticket[i]][1]
 
 ####Feature Selection####
-#data$Age <- NULL
 data$Surname <- NULL
 data$Name <- NULL
 data$Ticket <- NULL
 data$Fare <- NULL
-
-#### Prediction of AGE NA ####
 data$Age %<>% as.integer() %<>% discretize(categories = 8, ordered = T)
 data <- data[,c(1,2,6,3,4,5,7:ncol(data))]
-data.naomit <- data[ - which(is.na(data$Age)), ]
-set.seed(123)
-age.part <- createDataPartition(data.naomit$Age, p = 0.6, times = 1, list = F)
-age.train <- data.naomit[age.part,]
-age.test <- data.naomit[- age.part,]
+
+#### Prediction of AGE NA #### 
+#---> Accuracy 30%, not suitable
+# data.naomit <- data[ - which(is.na(data$Age)), ]
+# set.seed(123)
+# age.part <- createDataPartition(data.naomit$Age, p = 0.8, times = 1, list = F)
+# age.train <- data.naomit[age.part,]
+# age.test <- data.naomit[- age.part,]
+# 
+# set.seed(123)
+# age.auto.ctrl <- rfeControl(functions=rfFuncs, method="cv", number=10)
+# age.feat <- rfe(age.train[,4:ncol(age.train)], age.train[,3],rfeControl = age.auto.ctrl)
+# print(age.feat)
+# age.var <- c("Age","Title","Pclass","Parch","Fare.n")
+# 
+# set.seed(123)
+# age.knn <- train(Age~., data = select(age.train, age.var),
+#                  method = "knn", trControl = trainControl(method = "cv",number = 5),
+#                  preProcess= c("center", "scale")
+#                  )
+# age.knn
+
+#### Auto Feature Prediction ####
+data$Age <- NULL
+
+auto.data <- data[which(data$Data %in% "train"),]# of total data set only use "train data"
 
 set.seed(123)
-age.auto.ctrl <- rfeControl(functions=rfFuncs, method="cv", number=10)
-age.feat <- rfe(age.train[,4:ncol(age.train)], age.train[,3],rfeControl = age.auto.ctrl)
-print(age.feat)
-age.var <- c("Age","Title","Pclass","Parch","Fare.n")
+auto.part <- createDataPartition(auto.data$Survived, p = 0.8, times = 1, list = F)# create 80/20 train test size
+auto.train <- auto.data[auto.part,]# apply 80% train size
+auto.test <- auto.data[-auto.part,]# apply 20% test size
 
-#### to do get knn working ####
 set.seed(123)
-age.knn <- train(Age~., data = select(age.train, age.var), 
-                 method = "knn", trControl = trainControl(method = "cv",number = 5), 
-                 preProcess= c("center", "scale")
-                 )
-age.knn
-age.validation <- subset(data[,3], data$Data == "test")
-predict(age.validation)
-#apply 
-
-#automated
-set.seed(123)
-auto.ctrl <- rfeControl(functions=rfFuncs, method="cv", number=10)
-auto.feat <- rfe(data.r[,3:ncol(data.r)], data.r[,2],rfeControl = auto.ctrl)
+auto.ctrl <- rfeControl(functions=rfFuncs, method="cv", number=10)# set control settings
+auto.feat <- rfe(auto.train[,3:ncol(auto.train)], auto.train[,2], rfeControl = auto.ctrl)# run the auto model
 print(auto.feat)
+# Variables Accuracy  Kappa     AccuracySD  KappaSD Selected
+# 4        0.7856     0.5384    0.04632     0.11270         
+# 8        0.8206     0.6179    0.04006     0.08568 *
+# 11       0.8122     0.5993    0.04009     0.08699 
+
+round(postResample(predict(auto.feat, auto.test), auto.test$Survived),digits = 3)# results
+# Accuracy    Kappa 
+# 0.797       0.584 
+
+auto.var <- c("Survived","Title","Fare.n","Pclass","Sex","Famsize","Data")# select top 5 variables
+p.data <- data[, auto.var]
+
 
 ####Prediction Model####
+train <- p.data[which(p.data$Data %in% "train"),]#update train data
+test <- p.data[which(p.data$Data %in% "test"),]#update test data
+validation$Survived <- as.factor(validation$Survived)
+
+
+set.seed(170)
+p.knn <- train(Survived~., data = train[,1:6], method = "knn", trControl = trainControl(method = "repeatedcv",repeats = 5),
+               preProcess = c("scale"), tuneLength = 20)
+plot(p.knn)
+set.seed(170)
+res.knn <- c(round(postResample(predict(p.knn,test),validation$Survived),digits = 3))
+# Accuracy    Kappa 
+# 0.935     0.863 
+
+set.seed(170)
+p.svm <- train(Survived~., data = train[,1:6], method = "svmLinear", trControl = trainControl(method = "cv",repeats = 5))
+res.svm <- c(round(postResample(predict(p.svm,test),validation$Survived),digits = 3))
+# Accuracy    Kappa 
+# 0.950    0.893
+
+set.seed(170)
+p.rfor <- randomForest(Survived~., data = train[,1:6], trControl = trainControl(method = "cv",repeats = 5))
+res.rfor <- c(round(postResample(predict(p.rfor,test),validation$Survived),digits = 3))
+# Accuracy    Kappa 
+# 0.940    0.873 
+#### Result: Use SVM ####
 
 ####Output####
+final.data <- data
+final.data[which(final.data$Data %in% "test"),]$Survived <- predict(p.svm,test)
+final.data$Data <- NULL
+final.data$Survived <- as.integer(final.data$Survived)
+
+table_comp <- data.frame(rbind(res.knn,res.svm,res.rfor))
+colnames(table_comp) <- c("Accuracy","Kappa")
+rownames(table_comp) <- c("K-NN","SVM Linear","Random Forest")
+table_comp$Accuracy <- table_comp$Accuracy*100
+table_comp# comparison table for algorithms run
